@@ -62,6 +62,14 @@ impl DynamicMessage {
         Arc::clone(&self.schema)
     }
 
+    /// Consume the message and return its shared schema and owned field values.
+    ///
+    /// This is useful for adapters that can move strings and collection
+    /// buffers into another representation without cloning them.
+    pub fn into_parts(self) -> (Arc<MessageSchema>, Vec<DynamicValue>) {
+        (self.schema, self.values)
+    }
+
     /// Get field value by name with type conversion.
     ///
     /// Supports dot notation for nested fields (e.g., "linear.x").
@@ -559,7 +567,7 @@ fn validate_sequence_length(len: usize, path: &str) -> Result<(), DynamicError> 
 fn is_byte_type(field_type: &FieldType) -> bool {
     matches!(
         field_type,
-        FieldType::Uint8 | FieldType::Char | FieldType::Byte
+        FieldType::Int8 | FieldType::Uint8 | FieldType::Char | FieldType::Byte
     )
 }
 

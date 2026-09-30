@@ -194,6 +194,27 @@ impl FromDynamic for String {
     }
 }
 
+impl FromDynamic for Vec<i8> {
+    fn from_dynamic(value: &DynamicValue) -> Option<Self> {
+        match value {
+            DynamicValue::Bytes(bytes) => Some(
+                bytes
+                    .iter()
+                    .map(|byte| i8::from_ne_bytes([*byte]))
+                    .collect(),
+            ),
+            DynamicValue::Array(values) => values
+                .iter()
+                .map(|value| match value {
+                    DynamicValue::Int8(value) => Some(*value),
+                    _ => None,
+                })
+                .collect(),
+            _ => None,
+        }
+    }
+}
+
 // Note: Vec<u8> uses DynamicValue::Bytes via the special-cased serialization,
 // but for generic Vec<T> we use DynamicValue::Array. The Bytes variant is for
 // optimized byte array handling in serialization.

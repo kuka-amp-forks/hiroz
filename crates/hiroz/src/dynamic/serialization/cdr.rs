@@ -133,19 +133,11 @@ fn serialize_value(
         }
 
         // Optimized byte array
-        (DynamicValue::Bytes(bytes), FieldType::Sequence(inner))
-            if matches!(
-                **inner,
-                FieldType::Uint8 | FieldType::Char | FieldType::Byte
-            ) =>
-        {
+        (DynamicValue::Bytes(bytes), FieldType::Sequence(inner)) if is_byte_type(inner) => {
             writer.write_bytes(bytes);
         }
         (DynamicValue::Bytes(bytes), FieldType::BoundedSequence(inner, _))
-            if matches!(
-                **inner,
-                FieldType::Uint8 | FieldType::Char | FieldType::Byte
-            ) =>
+            if is_byte_type(inner) =>
         {
             writer.write_bytes(bytes);
         }
@@ -235,6 +227,9 @@ fn deserialize_value<BO: ByteOrder>(
         // Fixed-size array
         FieldType::Array(inner, len) => {
             ensure_collection_feasible(*len, inner, reader, budget, depth + 1, path)?;
+            if is_numeric_type(inner) {
+                return read_numeric_array(inner, *len, reader, path, depth + 1, budget);
+            }
             let mut values = Vec::with_capacity(*len);
             for index in 0..*len {
                 values.push(deserialize_value(
@@ -251,22 +246,17 @@ fn deserialize_value<BO: ByteOrder>(
         // Sequence
         FieldType::Sequence(inner) => {
             // Optimize for byte arrays
-            if matches!(
-                **inner,
-                FieldType::Uint8 | FieldType::Char | FieldType::Byte
-            ) {
+            if is_byte_type(inner) {
                 let len = reader.read_sequence_length().map_err(map_cdr_err)?;
-                if len > reader.remaining() {
-                    return Err(DynamicError::DeserializationError(format!(
-                        "byte sequence at '{path}' exceeds remaining payload"
-                    )));
-                }
-                let bytes = reader.read_bytes(len).map_err(map_cdr_err)?.to_vec();
+                let bytes = read_byte_array(len, reader, path)?;
                 return Ok(DynamicValue::Bytes(bytes));
             }
 
             let len = reader.read_sequence_length().map_err(map_cdr_err)?;
             ensure_collection_feasible(len, inner, reader, budget, depth + 1, path)?;
+            if is_numeric_type(inner) {
+                return read_numeric_array(inner, len, reader, path, depth + 1, budget);
+            }
             let mut values = Vec::with_capacity(len);
             for index in 0..len {
                 values.push(deserialize_value(
@@ -283,24 +273,19 @@ fn deserialize_value<BO: ByteOrder>(
         // Bounded sequence
         FieldType::BoundedSequence(inner, max) => {
             // Same handling as unbounded sequence for deserialization
-            if matches!(
-                **inner,
-                FieldType::Uint8 | FieldType::Char | FieldType::Byte
-            ) {
+            if is_byte_type(inner) {
                 let len = reader.read_sequence_length().map_err(map_cdr_err)?;
                 check_bound(len, *max, path)?;
-                if len > reader.remaining() {
-                    return Err(DynamicError::DeserializationError(format!(
-                        "byte sequence at '{path}' exceeds remaining payload"
-                    )));
-                }
-                let bytes = reader.read_bytes(len).map_err(map_cdr_err)?.to_vec();
+                let bytes = read_byte_array(len, reader, path)?;
                 return Ok(DynamicValue::Bytes(bytes));
             }
 
             let len = reader.read_sequence_length().map_err(map_cdr_err)?;
             check_bound(len, *max, path)?;
             ensure_collection_feasible(len, inner, reader, budget, depth + 1, path)?;
+            if is_numeric_type(inner) {
+                return read_numeric_array(inner, len, reader, path, depth + 1, budget);
+            }
             let mut values = Vec::with_capacity(len);
             for index in 0..len {
                 values.push(deserialize_value(
@@ -320,6 +305,70 @@ fn deserialize_value<BO: ByteOrder>(
             Ok(DynamicValue::Message(Box::new(msg)))
         }
     }
+}
+
+fn is_byte_type(field_type: &FieldType) -> bool {
+    matches!(
+        field_type,
+        FieldType::Int8 | FieldType::Uint8 | FieldType::Char | FieldType::Byte
+    )
+}
+
+fn is_numeric_type(field_type: &FieldType) -> bool {
+    matches!(
+        field_type,
+        FieldType::Bool
+            | FieldType::Int8
+            | FieldType::Int16
+            | FieldType::Int32
+            | FieldType::Int64
+            | FieldType::Uint8
+            | FieldType::Char
+            | FieldType::Byte
+            | FieldType::Uint16
+            | FieldType::WChar
+            | FieldType::Uint32
+            | FieldType::Uint64
+            | FieldType::Float32
+            | FieldType::Float64
+    )
+}
+
+fn read_byte_array<BO: ByteOrder>(
+    len: usize,
+    reader: &mut CdrReader<BO>,
+    path: &str,
+) -> Result<Vec<u8>, DynamicError> {
+    if len > reader.remaining() {
+        return Err(DynamicError::DeserializationError(format!(
+            "byte sequence at '{path}' exceeds remaining payload"
+        )));
+    }
+    Ok(reader.read_bytes(len).map_err(map_cdr_err)?.to_vec())
+}
+
+fn read_numeric_array<BO: ByteOrder>(
+    element_type: &FieldType,
+    len: usize,
+    reader: &mut CdrReader<BO>,
+    path: &str,
+    depth: usize,
+    budget: &mut DecodeBudget,
+) -> Result<DynamicValue, DynamicError> {
+    check_decode_depth(depth)?;
+    let mut values = Vec::with_capacity(len);
+    for index in 0..len {
+        let value = deserialize_value(element_type, reader, path, depth, budget)
+            .map_err(|error| indexed_decode_error(path, index, error))?;
+        values.push(value);
+    }
+    Ok(DynamicValue::Array(values))
+}
+
+fn indexed_decode_error(path: &str, index: usize, error: DynamicError) -> DynamicError {
+    DynamicError::DeserializationError(format!(
+        "failed to decode element at '{path}[{index}]': {error}"
+    ))
 }
 
 struct DecodeBudget {
@@ -926,6 +975,38 @@ mod tests {
             decoded.get_dynamic("data").unwrap(),
             DynamicValue::Bytes(bytes)
         );
+    }
+
+    #[test]
+    fn signed_byte_sequences_use_compact_storage_and_roundtrip_wire_bytes() {
+        for field_type in [
+            FieldType::Sequence(Box::new(FieldType::Int8)),
+            FieldType::BoundedSequence(Box::new(FieldType::Int8), 3),
+        ] {
+            let schema = schema(field_type);
+            let mut encoded = CDR_HEADER_LE.to_vec();
+            encoded.extend_from_slice(&3u32.to_le_bytes());
+            encoded.extend_from_slice(&[255, 0, 100]);
+
+            let decoded = deserialize_cdr(&encoded, &schema).unwrap();
+            let value = decoded.get_dynamic("data").unwrap();
+            assert_eq!(value, DynamicValue::Bytes(vec![255, 0, 100]));
+            assert_eq!(decoded.get::<Vec<i8>>("data").unwrap(), [-1, 0, 100]);
+            assert_eq!(serialize_cdr(&decoded).unwrap(), encoded);
+        }
+    }
+
+    #[test]
+    fn signed_byte_sequence_rejects_truncated_and_impossible_lengths() {
+        let schema = schema(FieldType::Sequence(Box::new(FieldType::Int8)));
+        let mut truncated = CDR_HEADER_LE.to_vec();
+        truncated.extend_from_slice(&3u32.to_le_bytes());
+        truncated.extend_from_slice(&[255, 0]);
+        assert!(deserialize_cdr(&truncated, &schema).is_err());
+
+        let mut impossible = CDR_HEADER_LE.to_vec();
+        impossible.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(deserialize_cdr(&impossible, &schema).is_err());
     }
 
     #[test]

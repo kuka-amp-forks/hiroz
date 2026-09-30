@@ -2,7 +2,7 @@
 //!
 //! Provides JSON and human-readable text formatting for dynamic messages.
 
-use hiroz::dynamic::{DynamicMessage, DynamicValue};
+use hiroz::dynamic::{DynamicMessage, DynamicValue, FieldType};
 use serde_json;
 
 /// Convert a DynamicMessage to a JSON value
@@ -10,10 +10,34 @@ use serde_json;
 /// Recursively converts all fields, handling nested messages and arrays.
 pub fn dynamic_message_to_json(msg: &DynamicMessage) -> serde_json::Value {
     let mut fields = serde_json::Map::new();
-    for (name, value) in msg.iter() {
-        fields.insert(name.to_string(), dynamic_value_to_json(value));
+    for (field, value) in msg.schema().fields.iter().zip(msg.values()) {
+        fields.insert(
+            field.name.clone(),
+            dynamic_value_to_json_for_field(value, &field.field_type),
+        );
     }
     serde_json::Value::Object(fields)
+}
+
+fn dynamic_value_to_json_for_field(
+    value: &DynamicValue,
+    field_type: &FieldType,
+) -> serde_json::Value {
+    if let (
+        DynamicValue::Bytes(bytes),
+        FieldType::Sequence(inner) | FieldType::BoundedSequence(inner, _),
+    ) = (value, field_type)
+        && matches!(inner.as_ref(), FieldType::Int8)
+    {
+        return serde_json::Value::Array(
+            bytes
+                .iter()
+                .map(|byte| serde_json::Value::Number(i8::from_ne_bytes([*byte]).into()))
+                .collect(),
+        );
+    }
+
+    dynamic_value_to_json(value)
 }
 
 /// Convert a DynamicValue to a JSON value
@@ -143,6 +167,21 @@ mod tests {
         assert_eq!(json["count"], 42);
         assert_eq!(json["value"], std::f64::consts::PI);
         assert_eq!(json["name"], "test");
+    }
+
+    #[test]
+    fn signed_byte_sequences_remain_signed_in_json() {
+        let schema = MessageSchema::builder("test_msgs/msg/Int8Array")
+            .field("data", FieldType::Sequence(Box::new(FieldType::Int8)))
+            .build()
+            .unwrap();
+        let mut message = DynamicMessage::new(&schema);
+        message
+            .set_dynamic("data", DynamicValue::Bytes(vec![255, 0, 100]))
+            .unwrap();
+
+        let json = dynamic_message_to_json(&message);
+        assert_eq!(json["data"], serde_json::json!([-1, 0, 100]));
     }
 
     #[test]
