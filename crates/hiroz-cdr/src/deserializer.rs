@@ -295,6 +295,10 @@ where
     where
         V: Visitor<'de>,
     {
+        // rosidl gives a fieldless struct a `structure_needs_at_least_one_member: uint8`.
+        if fields.is_empty() {
+            self.reader.read_u8()?;
+        }
         visitor.visit_seq(SequenceHelper::new(self, fields.len()))
     }
 

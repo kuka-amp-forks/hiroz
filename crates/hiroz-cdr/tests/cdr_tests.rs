@@ -204,6 +204,42 @@ fn test_round_trip() {
     assert_eq!(serialized.len(), bytes_consumed);
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
+struct EmptyStruct {}
+
+#[test]
+fn test_empty_struct_encodes_rosidl_placeholder_byte() {
+    let serialized = to_vec::<_, LittleEndian>(&EmptyStruct {}, 16).unwrap();
+    assert_eq!(serialized, vec![0u8]);
+
+    let (deserialized, bytes_consumed): (EmptyStruct, usize) =
+        from_bytes::<EmptyStruct, LittleEndian>(&serialized).unwrap();
+    assert_eq!(deserialized, EmptyStruct {});
+    assert_eq!(bytes_consumed, 1);
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct WithEmptyField {
+    empty: EmptyStruct,
+    trailing: i32,
+}
+
+#[test]
+fn test_struct_with_empty_field_round_trips() {
+    let original = WithEmptyField {
+        empty: EmptyStruct {},
+        trailing: 7,
+    };
+    let serialized = to_vec::<_, LittleEndian>(&original, 16).unwrap();
+    // Placeholder byte, 3 bytes of padding, then the i32.
+    assert_eq!(serialized, vec![0u8, 0, 0, 0, 7, 0, 0, 0]);
+
+    let (deserialized, bytes_consumed): (WithEmptyField, usize) =
+        from_bytes::<WithEmptyField, LittleEndian>(&serialized).unwrap();
+    assert_eq!(deserialized, original);
+    assert_eq!(bytes_consumed, serialized.len());
+}
+
 #[test]
 fn test_endianness() {
     let val: i32 = 0x12345678;
