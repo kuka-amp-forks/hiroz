@@ -299,7 +299,11 @@ where
     }
 
     #[inline]
-    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
+    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
+        // rosidl gives a fieldless struct a `structure_needs_at_least_one_member: uint8`.
+        if len == 0 {
+            self.writer.write_u8(0);
+        }
         Ok(self)
     }
 
