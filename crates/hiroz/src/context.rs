@@ -537,7 +537,7 @@ impl ZContextBuilder {
 impl Builder for ZContextBuilder {
     type Output = ZContext;
 
-    #[tracing::instrument(name = "ctx_build", skip(self), fields(
+    #[tracing::instrument(name = "ctx_build", level = "debug", skip(self), fields(
         domain_id = %self.domain_id,
         config_file = ?self.config_file
     ))]

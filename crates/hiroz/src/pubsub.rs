@@ -314,7 +314,7 @@ where
 {
     type Output = ZPub<T, S>;
 
-    #[tracing::instrument(name = "pub_build", skip(self), fields(
+    #[tracing::instrument(name = "pub_build", level = "debug", skip(self), fields(
         topic = %self.entity.topic,
         qos_reliability = ?self.entity.qos.reliability,
         qos_durability = ?self.entity.qos.durability
@@ -467,7 +467,7 @@ where
     ///
     /// Use [`async_publish`](ZPub::async_publish) when calling from async code to
     /// avoid blocking the executor.
-    #[tracing::instrument(name = "publish", skip(self, msg), fields(
+    #[tracing::instrument(name = "publish", level = "trace", skip(self, msg), fields(
         topic = %self.entity.topic,
         sn = self.sn.load(Ordering::Acquire),
         payload_len = tracing::field::Empty,
@@ -1120,7 +1120,7 @@ where
     S: for<'a> ZDeserializer<Input<'a> = &'a [u8]>,
 {
     /// Receive and deserialize the next message (aligned with ROS behavior)
-    #[tracing::instrument(name = "recv", skip(self), fields(
+    #[tracing::instrument(name = "recv", level = "trace", skip(self), fields(
         topic = %self.entity.topic,
         payload_len = tracing::field::Empty
     ))]
@@ -1173,7 +1173,7 @@ impl ZSub<crate::dynamic::DynamicMessage, Sample, crate::dynamic::DynamicSerdeCd
     /// - The subscriber was built with a callback (no queue available)
     /// - The `dyn_schema` was not set via `.with_dyn_schema()`
     /// - Deserialization fails
-    #[tracing::instrument(name = "recv_dynamic", skip(self), fields(
+    #[tracing::instrument(name = "recv_dynamic", level = "trace", skip(self), fields(
         topic = %self.entity.topic,
         payload_len = tracing::field::Empty
     ))]
