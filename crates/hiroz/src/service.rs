@@ -82,7 +82,7 @@ where
 {
     type Output = ZClient<T>;
 
-    #[tracing::instrument(name = "client_build", skip(self), fields(
+    #[tracing::instrument(name = "client_build", level = "debug", skip(self), fields(
         service = %self.entity.topic
     ))]
     fn build(mut self) -> Result<Self::Output> {
@@ -241,7 +241,7 @@ where
     T: ZService,
 {
     #[cfg(feature = "rmw")]
-    #[tracing::instrument(name = "rmw_send_request", skip(self, msg, notify), fields(
+    #[tracing::instrument(name = "rmw_send_request", level = "trace", skip(self, msg, notify), fields(
         service = %self.topic,
         sn = self.sn.load(Ordering::Acquire),
         payload_len = tracing::field::Empty
@@ -694,7 +694,7 @@ where
     /// Blocks waiting to receive the next request on the service and then deserializes the payload.
     ///
     /// This method may fail if the message does not deserialize as the requested type.
-    #[tracing::instrument(name = "take_request", skip(self), fields(
+    #[tracing::instrument(name = "take_request", level = "trace", skip(self), fields(
         service = %self.key_expr,
         sn = tracing::field::Empty,
         payload_len = tracing::field::Empty

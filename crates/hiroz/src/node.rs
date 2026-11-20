@@ -207,7 +207,7 @@ impl ZNodeBuilder {
 impl Builder for ZNodeBuilder {
     type Output = ZNode;
 
-    #[tracing::instrument(name = "node_build", skip(self), fields(
+    #[tracing::instrument(name = "node_build", level = "debug", skip(self), fields(
         name = %self.name,
         namespace = %self.namespace,
         id = tracing::field::Empty
