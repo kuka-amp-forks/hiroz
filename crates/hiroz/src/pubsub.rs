@@ -3,7 +3,9 @@ use std::time::Duration;
 use std::{marker::PhantomData, sync::Arc};
 
 use tracing::{debug, trace, warn};
+use zenoh::key_expr::KeyExpr;
 use zenoh::liveliness::LivelinessToken;
+use zenoh::qos::CongestionControl;
 use zenoh::{Result, Session, Wait, sample::Sample};
 
 use crate::Builder;
@@ -65,12 +67,36 @@ fn cache_depth_from_history(history: QosHistory) -> usize {
     }
 }
 
+/// Declare a publisher with hiroz QoS applied, as rmw_zenoh_cpp's
+/// `rmw_publisher_data.cpp` does: congestion control `Block` only for
+/// `Reliable` + `KeepAll`, so a subscriber that stops reading cannot stall a
+/// `KeepLast` publisher, then the TransientLocal setup.
+pub(crate) fn declare_publisher<'a, 'b, 'c>(
+    session: &'a Session,
+    key_expr: KeyExpr<'b>,
+    qos: &hiroz_protocol::qos::QosProfile,
+) -> AdvancedPublisherBuilder<'a, 'b, 'c> {
+    let congestion = if matches!(
+        (qos.reliability, qos.history),
+        (QosReliability::Reliable, QosHistory::KeepAll)
+    ) {
+        CongestionControl::Block
+    } else {
+        CongestionControl::Drop
+    };
+    let builder = session
+        .declare_publisher(key_expr)
+        .congestion_control(congestion)
+        .advanced();
+    apply_transient_local_pub(builder, qos)
+}
+
 /// Apply hiroz TransientLocal QoS to an `AdvancedPublisherBuilder`.
 ///
 /// Mirrors rmw_zenoh_cpp's `rmw_publisher_data.cpp`: enables
 /// `publisher_detection` + `cache`, and `sample_miss_detection` when
 /// `Reliable`. No-op for `Volatile`.
-pub(crate) fn apply_transient_local_pub<'a, 'b, 'c>(
+fn apply_transient_local_pub<'a, 'b, 'c>(
     mut builder: AdvancedPublisherBuilder<'a, 'b, 'c>,
     qos: &hiroz_protocol::qos::QosProfile,
 ) -> AdvancedPublisherBuilder<'a, 'b, 'c> {
@@ -335,29 +361,11 @@ where
         let key_expr = (*topic_ke).clone(); // Deref and clone the KeyExpr
         debug!("[PUB] Key expression: {}", key_expr);
 
-        // Map QoS to Zenoh publisher settings
-        let mut pub_builder = self.session.declare_publisher(key_expr);
-
-        // Map reliability: Reliable uses Block, BestEffort uses Drop
-        match self.entity.qos.reliability {
-            QosReliability::Reliable => {
-                pub_builder = pub_builder.congestion_control(zenoh::qos::CongestionControl::Block);
-                debug!("[PUB] QoS: Reliable (Block)");
-            }
-            QosReliability::BestEffort => {
-                pub_builder = pub_builder.congestion_control(zenoh::qos::CongestionControl::Drop);
-                debug!("[PUB] QoS: BestEffort (Drop)");
-            }
-        }
-
-        // Build an AdvancedPublisher and apply TransientLocal config if needed.
-        let pub_builder = pub_builder.advanced();
         debug!(
             "[PUB] Durability: {:?}, history: {:?}",
             self.entity.qos.durability, self.entity.qos.history
         );
-        let pub_builder = apply_transient_local_pub(pub_builder, &self.entity.qos);
-        let inner = pub_builder.wait()?;
+        let inner = declare_publisher(&self.session, key_expr, &self.entity.qos).wait()?;
         debug!("[PUB] Publisher ready: topic={}", self.entity.topic);
 
         let lv_ke = self
@@ -1262,6 +1270,55 @@ impl ZSub<crate::dynamic::DynamicMessage, Sample, crate::dynamic::DynamicSerdeCd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_declare_publisher_blocks_only_reliable_keep_all() {
+        // A lone session: nothing to scout for, nothing to listen on.
+        let mut config = zenoh::Config::default();
+        for (key, value) in [
+            ("scouting/multicast/enabled", "false"),
+            ("scouting/gossip/enabled", "false"),
+            ("listen/endpoints", "[]"),
+        ] {
+            config.insert_json5(key, value).unwrap();
+        }
+        let session = zenoh::open(config).await.unwrap();
+        for (reliability, history, want) in [
+            (
+                QosReliability::Reliable,
+                QosHistory::KeepAll,
+                CongestionControl::Block,
+            ),
+            (
+                QosReliability::Reliable,
+                QosHistory::KeepLast(10),
+                CongestionControl::Drop,
+            ),
+            (
+                QosReliability::BestEffort,
+                QosHistory::KeepAll,
+                CongestionControl::Drop,
+            ),
+            (
+                QosReliability::BestEffort,
+                QosHistory::KeepLast(10),
+                CongestionControl::Drop,
+            ),
+        ] {
+            let qos = hiroz_protocol::qos::QosProfile {
+                reliability,
+                history,
+                ..Default::default()
+            };
+            let key_expr = KeyExpr::try_from("hiroz/test/congestion").unwrap();
+            let publisher = declare_publisher(&session, key_expr, &qos).await.unwrap();
+            assert_eq!(
+                publisher.congestion_control(),
+                want,
+                "{reliability:?} {history:?}"
+            );
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Topic name qualification (leading '/' is added when missing)

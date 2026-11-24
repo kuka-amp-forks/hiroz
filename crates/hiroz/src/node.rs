@@ -576,12 +576,9 @@ impl ZNode {
         type_hash: &str,
         qos: Option<crate::qos::QosProfile>,
     ) -> Result<RawPublisher> {
-        use zenoh::qos::CongestionControl;
-        use zenoh_ext::AdvancedPublisherBuilderExt;
-
         use crate::{
             entity::{EndpointEntity, EndpointKind},
-            pubsub::apply_transient_local_pub,
+            pubsub::declare_publisher,
             topic_name,
         };
 
@@ -606,12 +603,8 @@ impl ZNode {
         let topic_ke = self.keyexpr_format.topic_key_expr(&entity)?;
         let gid =
             crate::entity::endpoint_gid(&entity).expect("local endpoint always has node identity");
-        let publisher = self
-            .session
-            .declare_publisher((*topic_ke).clone())
-            .congestion_control(CongestionControl::Block)
-            .advanced();
-        let publisher = apply_transient_local_pub(publisher, &entity.qos).wait()?;
+        let publisher =
+            declare_publisher(&self.session, (*topic_ke).clone(), &entity.qos).wait()?;
 
         // Declare liveliness token so rmw_zenoh_cpp can discover this publisher.
         let lv_ke = self
